@@ -8,115 +8,79 @@ Original file is located at
 """
 
 # app.py
+
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
 import tensorflow as tf
+from zipfile import ZipFile
+import os
 
-# -----------------------
-# Load model and files
-# -----------------------
-@st.cache_resource
-def load_model():
-    model = tf.keras.models.load_model("ann_model.keras")  # ANN model
-    return model
+st.set_page_config(page_title="Customer Churn Dashboard", layout="wide")
 
-@st.cache_resource
-def load_encoder():
-    # Agar encoding use ki thi, otherwise skip
-    try:
-        encoder = joblib.load("encoder.pkl")
-        return encoder
-    except:
-        return None
+# 1️⃣ Load ZIP file (uploaded once in Colab/Drive)
+zip_path = "customer_data.zip"  # Change path if needed
 
+if not os.path.exists("customer_data.csv"):
+    with ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall()  # Extract CSV
+
+# 2️⃣ Load dataset
 @st.cache_data
 def load_data():
     df = pd.read_csv("customer_data.csv")
     return df
 
-# Load everything
-model = load_model()
-encoder = load_encoder()
 df = load_data()
 
-# -----------------------
-# Sidebar - Navigation
-# -----------------------
-st.sidebar.title("Churn Dashboard")
-menu = ["Home", "EDA", "Prediction"]
-choice = st.sidebar.selectbox("Menu", menu)
+# 3️⃣ Load trained ANN model
+model = tf.keras.models.load_model("ann_model.keras")
 
-# -----------------------
-# Home
-# -----------------------
-if choice == "Home":
-    st.title("Customer Churn Dashboard")
-    st.write("""
-        This dashboard allows you to:
-        - Explore customer data
-        - Predict churn probability using ANN model
-    """)
-    st.write(f"Dataset Shape: {df.shape}")
-    st.dataframe(df.head())
+# 4️⃣ Load feature columns (saved from training)
+feature_columns = joblib.load("feature_columns.pkl")
 
-# -----------------------
-# EDA / Data Analysis
-# -----------------------
-elif choice == "EDA":
-    st.header("Exploratory Data Analysis")
+# 5️⃣ Sidebar for customer selection
+st.sidebar.header("Select Customer")
+customer_idx = st.sidebar.number_input(
+    "Customer Index (0 - {})".format(len(df)-1),
+    min_value=0,
+    max_value=len(df)-1,
+    value=0
+)
 
-    st.subheader("Dataset Overview")
-    st.write(df.describe())
+# 6️⃣ Prediction function
+def predict_customer(customer_idx):
+    customer_data = df.iloc[[customer_idx]].drop(columns=["churn", "customer_id"])
 
-    st.subheader("Categorical Columns")
-    cat_cols = df.select_dtypes(include='object').columns
-    st.write(df[cat_cols].nunique())
+    # Add missing columns if any
+    for col in feature_columns:
+        if col not in customer_data.columns:
+            customer_data[col] = 0
 
-    st.subheader("Churn Distribution")
-    st.bar_chart(df['churn'].value_counts())
+    # Reorder columns to match training
+    customer_data = customer_data[feature_columns]
 
-# -----------------------
-# Prediction
-# -----------------------
-elif choice == "Prediction":
-    st.header("Predict Customer Churn")
+    prediction_prob = model.predict(customer_data)[0][0]
+    prediction = "Churn" if prediction_prob > 0.5 else "No Churn"
+    return prediction, prediction_prob
 
-    st.write("Enter customer details:")
+# 7️⃣ Make prediction
+prediction, prob = predict_customer(customer_idx)
 
-    # Example inputs - adjust according to your features
-    age = st.number_input("Age", min_value=18, max_value=100, value=30)
-    account_tenure = st.number_input("Account Tenure (Months)", min_value=0, max_value=600, value=12)
-    credit_cards_count = st.number_input("Credit Cards Count", min_value=0, max_value=10, value=1)
-    installment_loans_count = st.number_input("Installment Loans Count", min_value=0, max_value=10, value=0)
-    ccfp_products_count = st.number_input("CCFP Products Count", min_value=0, max_value=10, value=0)
-    atm_trans_3m = st.number_input("ATM Transactions (3M)", min_value=0, max_value=1000, value=10)
-    total_trans_3m = st.number_input("Total Transactions (3M)", min_value=0, max_value=5000, value=50)
+# 8️⃣ Dashboard main area
+st.title("Customer Churn Dashboard")
+st.subheader(f"Selected Customer Index: {customer_idx}")
 
-    # Add more fields as per your dataset
+st.metric(label="Prediction", value=prediction, delta=f"{prob:.2f} Probability")
 
-    input_dict = {
-        "age": age,
-        "account_tenure_months": account_tenure,
-        "credit_cards_count": credit_cards_count,
-        "installment_loans_count": installment_loans_count,
-        "ccfp_products_count": ccfp_products_count,
-        "atm_trans_count_3m": atm_trans_3m,
-        "total_trans_count_3m": total_trans_3m
-    }
+st.markdown("---")
+st.subheader("Customer Details")
+st.dataframe(df.iloc[[customer_idx]])
 
-    input_df = pd.DataFrame([input_dict])
+st.markdown("---")
+st.subheader("EDA / Summary Statistics")
+st.write(df.describe())
 
-    # If encoder exists, apply transformation
-    if encoder:
-        input_df = encoder.transform(input_df)
-
-    # Prediction
-    if st.button("Predict Churn"):
-        pred_prob = model.predict(input_df)[0][0]
-        st.write(f"Churn Probability: {pred_prob:.2f}")
-        if pred_prob > 0.5:
-            st.warning("⚠️ High risk of churn!")
-        else:
-            st.success("✅ Low risk of churn")
+# 9️⃣ Optionally show entire dataset
+if st.checkbox("Show full dataset"):
+    st.dataframe(df)
